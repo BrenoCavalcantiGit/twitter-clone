@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Twitter Clone</title>
+    {% verbatim %}
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, Helvetica, sans-serif; }
+      body { background: #f0f2f5; color: #1c1e21; }
+      a { color: #1d6fb8; text-decoration: none; }
+      button { cursor: pointer; font-size: 14px; }
+      .container { max-width: 640px; margin: 24px auto; padding: 0 12px; }
+      .top { background: #1d3557; display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; flex-wrap: wrap; gap: 8px; }
+      .top a, .top .link { color: #fff; }
+      .brand { font-size: 20px; font-weight: bold; }
+      nav { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+      .card { background: #fff; border-radius: 10px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+      .row { display: flex; gap: 12px; }
+      .grow { flex: 1; min-width: 0; }
+      .avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+      .avatar.ph { background: #457b9d; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+      .avatar.big { width: 72px; height: 72px; font-size: 28px; }
+      .bold { font-weight: bold; color: #1c1e21; }
+      .muted { color: #65676b; font-size: 13px; }
+      .content { margin: 6px 0; white-space: pre-wrap; word-wrap: break-word; }
+      .actions { display: flex; gap: 14px; }
+      .link { background: none; border: none; color: #65676b; }
+      .link.on { color: #d62828; font-weight: bold; }
+      .link.danger:hover { color: #d62828; }
+      input, textarea { width: 100%; padding: 10px; border: 1px solid #ccd0d5; border-radius: 8px; font-size: 14px; margin-bottom: 8px; }
+      textarea { resize: vertical; }
+      .btn { background: #1d3557; color: #fff; border: none; border-radius: 8px; padding: 9px 16px; font-weight: bold; }
+      .btn.light { background: #e4e6eb; color: #1c1e21; }
+      .btn:disabled { opacity: 0.6; }
+      .comments { margin-top: 10px; border-top: 1px solid #e4e6eb; padding-top: 10px; }
+      .comment { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 14px; }
+      .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+      .error { background: #fde8e8; color: #9b1c1c; padding: 10px; border-radius: 8px; margin-bottom: 10px; }
+      .ok { background: #e6f4ea; color: #1e6b34; padding: 10px; border-radius: 8px; margin-bottom: 10px; }
+      .stats { display: flex; gap: 16px; margin: 10px 0; }
+      .center { text-align: center; }
+      label { display: block; font-size: 13px; color: #65676b; margin-bottom: 4px; }
+    </style>
+    {% endverbatim %}
+  </head>
+  <body>
+    <div id="app"></div>
+
+    {% verbatim %}
+    <script>
+      (function () {
+        'use strict';
+
+        const app = document.getElementById('app');
+        const state = { token: localStorage.getItem('token'), me: null };
+        let list = { el: null, more: null, next: null, path: null };
+
+        // ---------- utilidades ----------
+        function esc(value) {
+          const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+          return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => map[c]);
+        }
+
+        function fmtDate(iso) {
+          return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+        }
+
+        function displayName(user) {
+          return user.name || user.username;
+        }
+
+        function errorMessage(data) {
+          if (!data) return 'Erro inesperado.';
+          if (typeof data === 'string') return data;
+          if (data.detail) return data.detail;
+          const parts = Object.keys(data).map((key) => {
+            const value = Array.isArray(data[key]) ? data[key].join(' ') : String(data[key]);
+            return key === 'non_field_errors' ? value : key + ': ' + value;
+          });
+          return parts.join(' | ') || 'Erro inesperado.';
+        }
+
+        function notice(message, kind) {
+          const box = document.getElementById('notice');
+          if (box) box.innerHTML = '<div class="' + (kind || 'error') + '">' + esc(message) + '</div>';
+          else alert(message);
+        }
+
+        async function api(path, options) {
+          options = options || {};
+          const headers = Object.assign({}, options.headers || {});
+          if (state.token) headers['Authorization'] = 'Token ' + state.token;
+
+          let body = options.body;
+          if (body && !(body instanceof FormData)) {
+            headers['Content-Type'] = 'application/json';
+            body = JSON.stringify(body);
+          }
+
+          let url = '/api' + path;
+          if (path.indexOf('http') === 0) {
+            const parsed = new URL(path);
+            url = parsed.pathname + parsed.search;
+          }
+
+          const response = await fetch(url, { method: options.method || 'GET', headers: headers, body: body });
+          let data = null;
+          if (response.status !== 204) {
+            try { data = await response.json(); } catch (e) { data = null; }
+          }
+
+          if (response.status === 401 && state.token && !options.noAuthRedirect) {
+            logout(false);
+            throw new Error('Sessão expirada. Entre novamente.');
+          }
+          if (!response.ok) throw new Error(errorMessage(data));
+          return data;
+        }
+
+        function logout(callApi) {
+          if (callApi && state.token) api('/auth/logout/', { method: 'POST' }).catch(() => {});
+          state.token = null;
+          state.me = null;
+          localStorage.removeItem('token');
+          location.hash = '#/login';
+          render();
+        }
+
+        // ---------- componentes ----------
+        function avatarHtml(user, big) {
+          const cls = 'avatar' + (big ? ' big' : '');
+          if (user.avatar) return '<img class="' + cls + '" src="' + esc(user.avatar) + '" alt="">';
+          return '<span class="' + cls + ' ph">' + esc(displayName(user).charAt(0).toUpperCase()) + '</span>';
+        }
+
+        function tweetHtml(t) {
+          const a = t.author;
+          const mine = a.id === state.me.id;
+          return (
+            '<article class="card tweet" data-id="' + t.id + '"><div class="row">' + avatarHtml(a) +
+            '<div class="grow"><div><a class="bold" href="#/u/' + encodeURIComponent(a.username) + '">' + esc(displayName(a)) +
+            '</a> <span class="muted">@' + esc(a.username) + ' · ' + esc(fmtDate(t.created_at)) + '</span></div>' +
+            '<p class="content">' + esc(t.content) + '</p>' +
+            '<div class="actions">' +
+            '<button class="link' + (t.liked_by_me ? ' on' : '') + '" data-action="like" data-id="' + t.id + '" data-liked="' + (t.liked_by_me ? 1 : 0) + '">♥ ' + t.likes_count + '</button>' +
+            '<button class="link" data-action="comments" data-id="' + t.id + '" data-count="' + t.comments_count + '">💬 ' + t.comments_count + '</button>' +
+            (mine ? '<button class="link danger" data-action="delete-tweet" data-id="' + t.id + '">Apagar</button>' : '') +
+            '</div><div class="comments" hidden></div></div></div></article>'
+          );
+        }
+
+        function commentHtml(c) {
+          const mine = c.author.id === state.me.id;
+          return (
+            '<div class="comment" data-comment="' + c.id + '"><div><a class="bold" href="#/u/' + encodeURIComponent(c.author.username) + '">' +
+            esc(displayName(c.author)) + '</a> ' + esc(c.content) + '</div>' +
+            (mine ? '<button class="link danger" data-action="delete-comment" data-id="' + c.id + '">Apagar</button>' : '') + '</div>'
+          );
+        }
+
+        function followButton(user) {
+          if (user.id === state.me.id) return '';
+          return '<button class="btn' + (user.is_following ? ' light' : '') + '" data-action="follow" data-username="' + esc(user.username) +
+            '" data-following="' + (user.is_following ? 1 : 0) + '">' + (user.is_following ? 'Deixar de seguir' : 'Seguir') + '</button>';
+        }
+
+        function userRow(user) {
+          return (
+            '<div class="card row">' + avatarHtml(user) + '<div class="grow"><a class="bold" href="#/u/' + encodeURIComponent(user.username) + '">' +
+            esc(displayName(user)) + '</a><div class="muted">@' + esc(user.username) + ' · ' + user.followers_count + ' seguidores</div></div>' +
+            followButton(user) + '</div>'
+          );
+        }
+
+        function layout(inner) {
+          return (
+            '<header class="top"><a class="brand" href="#/feed">Twitter Clone</a><nav>' +
+            '<a href="#/feed">Feed</a><a href="#/explore">Explorar</a>' +
+            '<a href="#/u/' + encodeURIComponent(state.me.username) + '">Meu perfil</a>' +
+            '<a href="#/me">Editar perfil</a><button class="link" data-action="logout">Sair</button></nav></header>' +
+            '<main class="container"><div id="notice"></div>' + inner + '</main>'
+          );
+        }
+
+        async function loadTweets(path, append) {
+          const data = await api(path);
+          if (!append) list.el.innerHTML = '';
+          if (!data.results.length && !append) list.el.innerHTML = '<p class="muted center">Nada por aqui ainda.</p>';
+          data.results.forEach((t) => list.el.insertAdjacentHTML('beforeend', tweetHtml(t)));
+          list.next = data.next;
+          list.more.hidden = !data.next;
+        }
+
+        function prepareList(path) {
+          list = { el: document.getElementById('tweets'), more: document.getElementById('more'), next: null, path: path };
+          return loadTweets(path, false);
+        }
+
+        // ---------- páginas ----------
+        function renderAuth(mode) {
+          const isLogin = mode !== 'register';
+          app.innerHTML =
+            '<main class="container"><div class="card"><h1 class="center">Twitter Clone</h1><p class="muted center" style="margin-bottom:14px">Compartilhe pensamentos e siga pessoas.</p>' +
+            '<div id="notice"></div><div class="tabs"><button class="btn' + (isLogin ? '' : ' light') + '" data-action="tab-login">Entrar</button>' +
+            '<button class="btn' + (isLogin ? ' light' : '') + '" data-action="tab-register">Criar conta</button></div>' +
+            '<form data-form="' + (isLogin ? 'login' : 'register') + '">' +
+            '<input name="username" placeholder="Nome de usuário" autocomplete="username" required />' +
+            (isLogin ? '' : '<input name="name" placeholder="Seu nome (opcional)" />') +
+            '<input name="password" type="password" placeholder="Senha" autocomplete="' + (isLogin ? 'current-password' : 'new-password') + '" required />' +
+            '<button class="btn" type="submit">' + (isLogin ? 'Entrar' : 'Cadastrar') + '</button></form></div></main>';
+        }
+
+        async function renderFeed() {
+          app.innerHTML = layout(
+            '<form class="card" data-form="tweet"><textarea name="content" rows="3" maxlength="280" placeholder="O que está acontecendo?" required></textarea>' +
+            '<button class="btn" type="submit">Tweetar</button></form><h2 style="margin-bottom:10px">Seu feed</h2>' +
+            '<p class="muted" style="margin-bottom:10px">Aqui aparecem apenas os tweets de quem você segue.</p>' +
+            '<div id="tweets"></div><button id="more" class="btn light" data-action="more" hidden>Carregar mais</button>'
+          );
+          await prepareList('/feed/');
+        }
+
+        async function renderExplore(term) {
+          app.innerHTML = layout(
+            '<form class="card" data-form="search"><input name="q" placeholder="Buscar pessoas..." value="' + esc(term || '') + '" />' +
+            '<button class="btn" type="submit">Buscar</button></form><div id="users"></div>'
+          );
+          const data = await api('/users/?q=' + encodeURIComponent(term || ''));
+          document.getElementById('users').innerHTML = data.results.map(userRow).join('') || '<p class="muted center">Ninguém encontrado.</p>';
+        }
+
+        async function renderProfile(username) {
+          const user = await api('/users/' + encodeURIComponent(username) + '/');
+          app.innerHTML = layout(
+            '<div class="card"><div class="row">' + avatarHtml(user, true) + '<div class="grow"><h2>' + esc(displayName(user)) +
+            '</h2><div class="muted">@' + esc(user.username) + '</div><div class="stats">' +
+            '<button class="link" data-action="show-followers" data-username="' + esc(user.username) + '"><b>' + user.followers_count + '</b> seguidores</button>' +
+            '<button class="link" data-action="show-following" data-username="' + esc(user.username) + '"><b>' + user.following_count + '</b> seguindo</button></div>' +
+            followButton(user) + '</div></div><div id="people"></div></div>' +
+            '<h3 style="margin-bottom:10px">Tweets</h3><div id="tweets"></div><button id="more" class="btn light" data-action="more" hidden>Carregar mais</button>'
+          );
+          await prepareList('/users/' + encodeURIComponent(username) + '/tweets/');
+        }
+
+        function renderMe() {
+          const user = state.me;
+          app.innerHTML = layout(
+            '<form class="card" data-form="profile"><h2 style="margin-bottom:12px">Editar perfil</h2>' +
+            '<p class="muted" style="margin-bottom:12px">Altere só o que quiser: nenhum campo é obrigatório.</p>' +
+            '<div class="row" style="margin-bottom:12px">' + avatarHtml(user, true) + '<div class="grow"><label>Foto de perfil (JPG, PNG, GIF ou WEBP, até 2 MB)</label>' +
+            '<input name="avatar" type="file" accept="image/*" />' +
+            (user.avatar ? '<label><input type="checkbox" name="remove_avatar" style="width:auto;margin-right:6px" />Remover a foto atual</label>' : '') +
+            '</div></div><label>Nome</label><input name="name" value="' + esc(user.name) + '" maxlength="150" />' +
+            '<label>Senha atual</label><input name="current_password" type="password" autocomplete="current-password" />' +
+            '<label>Nova senha</label><input name="new_password" type="password" autocomplete="new-password" />' +
+            '<button class="btn" type="submit">Salvar alterações</button></form>'
+          );
+        }
+
+        async function render() {
+          if (!state.token) return renderAuth(location.hash === '#/register' ? 'register' : 'login');
+
+          try {
+            if (!state.me) state.me = await api('/me/');
+            const parts = (location.hash.replace(/^#\/?/, '') || 'feed').split('/');
+            if (parts[0] === 'u' && parts[1]) return await renderProfile(decodeURIComponent(parts[1]));
+            if (parts[0] === 'explore') return await renderExplore('');
+            if (parts[0] === 'me') return renderMe();
+            return await renderFeed();
+          } catch (error) {
+            if (state.token) notice(error.message);
+          }
+        }
+
+        // ---------- eventos ----------
+        async function afterAuth(data) {
+          state.token = data.token;
+          state.me = data.user;
+          localStorage.setItem('token', data.token);
+          location.hash = '#/feed';
+          render();
+        }
+
+        app.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const form = event.target;
+          const kind = form.dataset.form;
+          const button = form.querySelector('button[type=submit]');
+          if (button) button.disabled = true;
+
+          try {
+            if (kind === 'login' || kind === 'register') {
+              const payload = Object.fromEntries(new FormData(form).entries());
+              await afterAuth(await api('/auth/' + kind + '/', { method: 'POST', body: payload, noAuthRedirect: true }));
+            } else if (kind === 'tweet') {
+              const created = await api('/tweets/', { method: 'POST', body: { content: form.content.value } });
+              form.reset();
+              const empty = list.el.querySelector('p.muted');
+              if (empty) empty.remove();
+              list.el.insertAdjacentHTML('afterbegin', tweetHtml(created));
+            } else if (kind === 'comment') {
+              const id = form.dataset.id;
+              const created = await api('/tweets/' + id + '/comments/', { method: 'POST', body: { content: form.content.value } });
+              form.reset();
+              form.parentElement.querySelector('.comment-list').insertAdjacentHTML('beforeend', commentHtml(created));
+              const countButton = form.closest('.tweet').querySelector('[data-action=comments]');
+              const count = Number(countButton.dataset.count) + 1;
+              countButton.dataset.count = count;
+              countButton.textContent = '💬 ' + count;
+            } else if (kind === 'search') {
+              await renderExplore(form.q.value);
+            } else if (kind === 'profile') {
+              const data = new FormData(form);
+              ['current_password', 'new_password'].forEach((key) => { if (!data.get(key)) data.delete(key); });
+              const file = data.get('avatar');
+              if (!file || !file.name) data.delete('avatar');
+              const result = await api('/me/', { method: 'PATCH', body: data });
+              state.me = result.user;
+              if (result.token) {
+                state.token = result.token;
+                localStorage.setItem('token', result.token);
+              }
+              renderMe();
+              notice('Perfil atualizado com sucesso!', 'ok');
+            }
+          } catch (error) {
+            notice(error.message);
+          } finally {
+            if (button) button.disabled = false;
+          }
+        });
+
+        app.addEventListener('click', async (event) => {
+          const el = event.target.closest('[data-action]');
+          if (!el) return;
+          const action = el.dataset.action;
+
+          try {
+            if (action === 'logout') return logout(true);
+            if (action === 'tab-login') return renderAuth('login');
+            if (action === 'tab-register') return renderAuth('register');
+
+            if (action === 'more') {
+              if (list.next) await loadTweets(list.next, true);
+            } else if (action === 'like') {
+              const liked = el.dataset.liked === '1';
+              const data = await api('/tweets/' + el.dataset.id + '/like/', { method: liked ? 'DELETE' : 'POST' });
+              el.dataset.liked = data.liked_by_me ? '1' : '0';
+              el.classList.toggle('on', data.liked_by_me);
+              el.textContent = '♥ ' + data.likes_count;
+            } else if (action === 'delete-tweet') {
+              if (!confirm('Apagar este tweet?')) return;
+              await api('/tweets/' + el.dataset.id + '/', { method: 'DELETE' });
+              el.closest('.tweet').remove();
+            } else if (action === 'comments') {
+              const box = el.closest('.tweet').querySelector('.comments');
+              if (!box.hidden) { box.hidden = true; return; }
+              const data = await api('/tweets/' + el.dataset.id + '/comments/');
+              box.innerHTML = '<div class="comment-list">' + data.results.map(commentHtml).join('') + '</div>' +
+                '<form data-form="comment" data-id="' + el.dataset.id + '"><input name="content" maxlength="280" placeholder="Escreva um comentário..." required />' +
+                '<button class="btn" type="submit">Comentar</button></form>';
+              box.hidden = false;
+            } else if (action === 'delete-comment') {
+              await api('/comments/' + el.dataset.id + '/', { method: 'DELETE' });
+              el.closest('.comment').remove();
+            } else if (action === 'follow') {
+              const following = el.dataset.following === '1';
+              await api('/users/' + encodeURIComponent(el.dataset.username) + '/follow/', { method: following ? 'DELETE' : 'POST' });
+              render();
+            } else if (action === 'show-followers' || action === 'show-following') {
+              const kind = action === 'show-followers' ? 'followers' : 'following';
+              const data = await api('/users/' + encodeURIComponent(el.dataset.username) + '/' + kind + '/');
+              document.getElementById('people').innerHTML =
+                '<h3 style="margin:10px 0">' + (kind === 'followers' ? 'Seguidores' : 'Seguindo') + '</h3>' +
+                (data.results.map(userRow).join('') || '<p class="muted">Ninguém por aqui ainda.</p>');
+            }
+          } catch (error) {
+            notice(error.message);
+          }
+        });
+
+        window.addEventListener('hashchange', render);
+        render();
+      })();
+    </script>
+    {% endverbatim %}
+  </body>
+</html>
