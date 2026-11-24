@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  tests:
+    name: Testes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixa o codigo
+        uses: actions/checkout@v4
+
+      - name: Configura o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Instala as dependencias
+        run: pip install -r requirements.txt
+
+      - name: Verifica o projeto
+        run: python manage.py check
+
+      - name: Roda os testes
+        run: python manage.py test
