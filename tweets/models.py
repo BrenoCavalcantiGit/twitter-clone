@@ -6,9 +6,15 @@ from django.db.models import Count
 class TweetQuerySet(models.QuerySet):
     def with_counts(self):
         """Traz o autor e as contagens de curtidas e comentários."""
-        return self.select_related('author', 'author__profile').annotate(
-            likes_count=Count('likes', distinct=True),
-            comments_count=Count('comments', distinct=True),
+        # O order_by explícito é necessário: com annotate + Count, o Django
+        # ignora o Meta.ordering e a lista ficaria sem ordem definida.
+        return (
+            self.select_related('author', 'author__profile')
+            .annotate(
+                likes_count=Count('likes', distinct=True),
+                comments_count=Count('comments', distinct=True),
+            )
+            .order_by('-created_at', '-id')
         )
 
 
